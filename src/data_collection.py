@@ -1,3 +1,8 @@
+'''
+Created by Qunkun Ma
+pulls in 100000 entries from OpenAlex API where the authorship institution is U-M
+'''
+
 import pandas as pd
 from pyalex import Works, config
 
