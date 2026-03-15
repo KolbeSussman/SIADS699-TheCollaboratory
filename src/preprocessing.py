@@ -27,14 +27,16 @@ df = df.drop_duplicates(subset=['id', 'doi'])
 
 # drop unneeded columns
 #### QUNKUN HAS THIS CODE SOEMWHERE
+#### this is Kolbe's makeshift version, replace as needed
 cols_to_keep = ['id', 'doi', 'title', 'authorships', 'topics',
        'primary_topic', 'cited_by_count', 'publication_year', 'related_works',
        'concepts']
 
-df = df[[cols_to_keep]]
+df = df[cols_to_keep]
 
 # Extract authorship info
-df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)    # this step specificially may take 1-2 minutes
+print("Extracting Authorship Information")
+df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)    #this step specificially may take 1-2 minutes
 
 ## list of author IDs
 def extract_author_ids(authorships):
@@ -89,6 +91,8 @@ def extract_raw_affiliations(authorships):
 df["raw_affiliations"] = df["authorships_parsed"].apply(extract_raw_affiliations)
 
 # Extract Topics
+print("Extracting Topic Information")
+
 df["topics_parsed"] = df["topics"].apply(ast.literal_eval)    # this step specificially may take 1-2 minutes
 
 ## extract topic ID
@@ -108,3 +112,10 @@ def extract_topic_scores(topics):
     return [t.get("score") for t in topics if t.get("score") is not None]
 
 df["topic_scores"] = df["topics_parsed"].apply(extract_topic_scores)
+
+# Output to csv
+
+df.to_csv(PROCESSED_CSV, index=False)
+print(f"Saved {len(df)} records to {PROCESSED_CSV}")
+
+print("Data processing finished.")
