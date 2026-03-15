@@ -1,0 +1,17 @@
+# Ignore large data
+data/raw/
+data/processed/
+
+# Ignore outputs
+outputs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Mac
+.DS_Store

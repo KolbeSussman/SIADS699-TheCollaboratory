@@ -9,9 +9,13 @@ from pyalex import Works, config
 # Configuration
 #Kolbe API Key
 api_key = 'NGABT8lQbr5z8VxZ9r5AHe'
-
 config.api_key = api_key
 
+
+OUTPUT_CSV = "data/raw/umich_works_100k.csv"
+
+
+# Data Collection
 umich_works_pager = Works().filter(authorships={"institutions": {"ror": "00jmfr291"}}).paginate(per_page=200, n_max=100000)
 
 all_works = []
@@ -21,5 +25,11 @@ for page in umich_works_pager:
 
 
 # Output to csv
-df_100k = pd.DataFrame(all_works)
-df_100k.to_csv("../data/raw/umich_works_100k".csv, index=False)
+if all_works:
+    df_100k = pd.DataFrame(all_works)
+    df_100k.to_csv(OUTPUT_CSV, index=False)
+    print(f"Saved {len(df_100k)} records to {OUTPUT_CSV}")
+else:
+    print("No works collected. CSV not created.")
+
+print("Data collection finished.")
