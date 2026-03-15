@@ -11,7 +11,7 @@ import pandas as pd
 import astx
 
 # Paths
-RAW_CSV = "/Users/kolbesussman/Downloads/umich_works_selected_columns.csv"
+RAW_CSV = "data/raw/umich_works_100k.csv"
 PROCESSED_CSV = "data/processed/umich_works_cleaned.csv"
 
 ## Ensure output directory exists
@@ -27,7 +27,11 @@ df = df.drop_duplicates(subset=['id', 'doi'])
 
 # drop unneeded columns
 #### QUNKUN HAS THIS CODE SOEMWHERE
+cols_to_keep = ['id', 'doi', 'title', 'authorships', 'topics',
+       'primary_topic', 'cited_by_count', 'publication_year', 'related_works',
+       'concepts']
 
+df = df[[cols_to_keep]]
 
 # Extract authorship info
 df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)
