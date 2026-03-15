@@ -34,7 +34,7 @@ cols_to_keep = ['id', 'doi', 'title', 'authorships', 'topics',
 df = df[[cols_to_keep]]
 
 # Extract authorship info
-df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)
+df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)    # this step specificially may take 1-2 minutes
 
 ## list of author IDs
 def extract_author_ids(authorships):
@@ -89,7 +89,7 @@ def extract_raw_affiliations(authorships):
 df["raw_affiliations"] = df["authorships_parsed"].apply(extract_raw_affiliations)
 
 # Extract Topics
-df["topics_parsed"] = df["topics"].apply(ast.literal_eval)
+df["topics_parsed"] = df["topics"].apply(ast.literal_eval)    # this step specificially may take 1-2 minutes
 
 ## extract topic ID
 def extract_topic_ids(topics):

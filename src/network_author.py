@@ -1,56 +1,74 @@
+"""
+Created by: Kolbe Sussman
+
+Creates networks of coauthorship at the author level
+using pre-parsed authorship columns
+"""
+
 import pandas as pd
-import ast
-import itertools
+import networkx as nx
+from itertools import combinations
 from collections import Counter
-import os
-
-# Paths
-INPUT_CSV = "data/processed/umich_works_cleaned.csv"
-OUTPUT_CSV = "data/processed/author_edges.csv"
-
-os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
 
 # Load cleaned data
-print("Loading cleaned dataset...")
-df = pd.read_csv(INPUT_CSV)
+DATA_PATH = "../data/processed/umich_works_cleaned.csv"
+df = pd.read_csv(DATA_PATH)
 
-# Convert string lists back to Python lists
-df["author_ids"] = df["author_ids"].apply(ast.literal_eval)
-
-print(f"Papers loaded: {len(df)}")
-
-# Build edge list
-print("Generating co-authorship pairs...")
-
-edge_counter = Counter()
-
-for authors in df["author_ids"]:
-    
-    # Remove duplicates just in case
-    authors = list(set(authors))
-    
-    # Generate all unique author pairs
-    pairs = itertools.combinations(sorted(authors), 2)
-    
-    for pair in pairs:
-        edge_counter[pair] += 1
-
-print(f"Total unique edges: {len(edge_counter)}")
-
-# Convert to dataframe
+# Extract author-level edges using pre-parsed column
 edges = []
+author_info = {}
 
-for (author1, author2), weight in edge_counter.items():
-    edges.append({
-        "author1": author1,
-        "author2": author2,
-        "weight": weight
-    })
+for _, row in df.iterrows():
+    author_names = row['author_names']
+    raw_affiliations = row['raw_affiliations']
+    author_ids = row['author_ids']
 
-edges_df = pd.DataFrame(edges)
+    # Sanity check: make sure lists exist
+    if pd.isna(author_names) or len(author_names) < 2:
+        continue  # skip papers with <2 authors - they do not connect to others
 
-# Save edge list
-edges_df.to_csv(OUTPUT_CSV, index=False)
+    # store metadata for each author
+    for i, name in enumerate(author_names):
+        if name not in author_info:
+            author_info[name] = {
+                'id': author_ids[i] if i < len(author_ids) else None,
+                'affiliation': raw_affiliations[i] if i < len(raw_affiliations) else None
+            }
 
-print(f"Edge list saved to {OUTPUT_CSV}")
-print(f"Total edges: {len(edges_df)}")
+    # generate all co-author pairs for this paper
+    for pair in combinations(author_names, 2):
+        edges.append(tuple(sorted(pair)))
+
+# Count weights
+edge_weights = Counter(edges)
+
+# Build NetworkX graph
+G = nx.Graph()
+for (auth1, auth2), weight in edge_weights.items():
+    G.add_edge(auth1, auth2, weight=weight)
+
+# Compute metrics
+degree_centrality = nx.degree_centrality(G)
+betweenness_centrality = nx.betweenness_centrality(G, weight='weight')
+eigenvector_centrality = nx.eigenvector_centrality(G, weight='weight')
+
+# Save network metrics
+metrics_df = pd.DataFrame({
+    'author': list(G.nodes),
+    'degree_centrality': [degree_centrality[a] for a in G.nodes],
+    'betweenness_centrality': [betweenness_centrality[a] for a in G.nodes],
+    'eigenvector_centrality': [eigenvector_centrality[a] for a in G.nodes],
+    'id': [author_info[a]['id'] for a in G.nodes],
+    'affiliation': [author_info[a]['affiliation'] for a in G.nodes]
+})
+
+metrics_df.to_csv("../data/processed/author_network_metrics.csv", index=False)
+
+# Save full edge list
+edges_df = pd.DataFrame([
+    {'author_1': a1, 'author_2': a2, 'weight': w}
+    for (a1, a2), w in edge_weights.items()
+])
+edges_df.to_csv("../data/processed/author_network_edges.csv", index=False)
+
+print("Author network created and metrics saved!")

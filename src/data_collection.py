@@ -1,6 +1,8 @@
 '''
 Created by Qunkun Ma
 pulls in 100000 entries from OpenAlex API where the authorship institution is U-M
+
+Note: will take ~30 minutes, depending on compute power/speed
 '''
 
 import pandas as pd
