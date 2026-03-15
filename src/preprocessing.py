@@ -8,7 +8,7 @@ Uses raw datset from OpenAlex and does the following:
 
 import os
 import pandas as pd
-import astx
+import ast
 
 # Paths
 RAW_CSV = "data/raw/umich_works_100k.csv"

@@ -46,7 +46,7 @@ project_root/
 ## Dependencies
 Python 3.9+
 pyalex
-pandas, numpy
+pandas, numpy, ast
 networkx or igraph
 scikit-learn
 matplotlib, seaborn
