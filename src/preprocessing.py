@@ -113,6 +113,10 @@ def extract_topic_scores(topics):
 
 df["topic_scores"] = df["topics_parsed"].apply(extract_topic_scores)
 
+
+# remove articles with more than one entry in OpenAlex
+df = df.groupby('title').first().reset_index()
+
 # Output to csv
 
 df.to_csv(PROCESSED_CSV, index=False)
