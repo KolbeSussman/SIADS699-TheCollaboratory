@@ -122,4 +122,7 @@ df = df.groupby('title').first().reset_index()
 df.to_csv(PROCESSED_CSV, index=False)
 print(f"Saved {len(df)} records to {PROCESSED_CSV}")
 
+print(df.columns.tolist())
+
+
 print("Data processing finished.")
