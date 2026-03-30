@@ -27,7 +27,6 @@ def safe_parse(x):
             return []
     return []
 
-print(df.columns.tolist())
 
 # Parse affiliations
 df['raw_affiliations'] = df['raw_affiliations'].apply(safe_parse)

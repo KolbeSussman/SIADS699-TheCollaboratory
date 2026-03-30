@@ -1,10 +1,10 @@
-'''
+"""
 Created by Kolbe Sussman & Qunkun Ma
-Uses raw datset from OpenAlex and does the following:
-- extracts only the needed columns
-- extacts needed authorship information from json text in "authorship" column
-- extracts topic information from json text in "topics" columns
-'''
+Preprocessing script for OpenAlex U-M dataset:
+- extracts needed columns
+- extracts authorship info from JSON in "authorships"
+- extracts topics info from JSON in "topics"
+"""
 
 import os
 import pandas as pd
@@ -14,10 +14,10 @@ import ast
 RAW_CSV = "data/raw/umich_works_100k.csv"
 PROCESSED_CSV = "data/processed/umich_works_cleaned.csv"
 
-## Ensure output directory exists
+# Ensure output directory exists
 os.makedirs(os.path.dirname(PROCESSED_CSV), exist_ok=True)
 
-# Load Data
+# Load data
 print("Loading raw data...")
 df = pd.read_csv(RAW_CSV)
 print(f"Loaded {len(df)} rows")
@@ -25,104 +25,89 @@ print(f"Loaded {len(df)} rows")
 # Drop duplicates based on 'id' or 'doi'
 df = df.drop_duplicates(subset=['id', 'doi'])
 
-# drop unneeded columns
-#### QUNKUN HAS THIS CODE SOEMWHERE
-#### this is Kolbe's makeshift version, replace as needed
-cols_to_keep = ['id', 'doi', 'title', 'authorships', 'topics',
-       'primary_topic', 'cited_by_count', 'publication_year', 'related_works',
-       'concepts']
-
+# Keep only necessary columns
+cols_to_keep = [
+    'id', 'doi', 'title', 'authorships', 'topics',
+    'primary_topic', 'cited_by_count', 'publication_year',
+    'related_works', 'concepts'
+]
 df = df[cols_to_keep]
 
-# Extract authorship info
-print("Extracting Authorship Information")
-df["authorships_parsed"] = df["authorships"].apply(ast.literal_eval)    #this step specificially may take 1-2 minutes
+print("Parsing authorship information...")
 
-## list of author IDs
+def safe_literal_eval(x):
+    """Safely parse JSON-like strings to Python objects."""
+    if isinstance(x, str):
+        try:
+            return ast.literal_eval(x)
+        except:
+            return []
+    elif isinstance(x, list):
+        return x
+    else:
+        return []
+
+df['authorships_parsed'] = df['authorships'].apply(safe_literal_eval)
+
 def extract_author_ids(authorships):
     return [
-        author["author"]["id"]
+        author.get("author", {}).get("id")
         for author in authorships
-        if author.get("author")
+        if author.get("author") and author.get("author", {}).get("id")
     ]
 
-df["author_ids"] = df["authorships_parsed"].apply(extract_author_ids)
-
-
-## list of author names
 def extract_author_names(authorships):
     return [
-        author["author"]["display_name"]
+        author.get("author", {}).get("display_name")
         for author in authorships
-        if author.get("author")
+        if author.get("author") and author.get("author", {}).get("display_name")
     ]
 
-df["author_names"] = df["authorships_parsed"].apply(extract_author_names)
-
-
-## list of author institutions
 def extract_institutions(authorships):
-    institutions = []
-    
+    institutions = set()
     for author in authorships:
         for inst in author.get("institutions", []):
             name = inst.get("display_name")
             if name:
-                institutions.append(name)
-                
-    return list(set(institutions))
+                institutions.add(name)
+    return list(institutions)
 
-df["institutions"] = df["authorships_parsed"].apply(extract_institutions)
-
-
-## list of author affiliations - will be department/unit if available, otherwise will be U-M
 def extract_raw_affiliations(authorships):
-    affiliations = []
-
+    affiliations = set()
     for author in authorships:
         for aff in author.get("affiliations", []):
             raw = aff.get("raw_affiliation_string")
             if raw:
                 dept = raw.split(",")[0].strip()
-                affiliations.append(dept)
+                if dept:
+                    affiliations.add(dept)
+    return list(affiliations)
 
-    return list(set(affiliations))
+df['author_ids'] = df['authorships_parsed'].apply(extract_author_ids)
+df['author_names'] = df['authorships_parsed'].apply(extract_author_names)
+df['institutions'] = df['authorships_parsed'].apply(extract_institutions)
+df['raw_affiliations'] = df['authorships_parsed'].apply(extract_raw_affiliations)
 
-df["raw_affiliations"] = df["authorships_parsed"].apply(extract_raw_affiliations)
+print("Parsing topic information...")
 
-# Extract Topics
-print("Extracting Topic Information")
+df['topics_parsed'] = df['topics'].apply(safe_literal_eval)
 
-df["topics_parsed"] = df["topics"].apply(ast.literal_eval)    # this step specificially may take 1-2 minutes
-
-## extract topic ID
 def extract_topic_ids(topics):
     return [t.get("id") for t in topics if t.get("id")]
 
-df["topic_ids"] = df["topics_parsed"].apply(extract_topic_ids)
-
-## extract topic display_name
-def extract_display_name(topics):
+def extract_display_names(topics):
     return [t.get("display_name") for t in topics if t.get("display_name")]
 
-df["display_names"] = df["topics_parsed"].apply(extract_display_name)
-
-## extract topic score
 def extract_topic_scores(topics):
     return [t.get("score") for t in topics if t.get("score") is not None]
 
-df["topic_scores"] = df["topics_parsed"].apply(extract_topic_scores)
+df['topic_ids'] = df['topics_parsed'].apply(extract_topic_ids)
+df['display_names'] = df['topics_parsed'].apply(extract_display_names)
+df['topic_scores'] = df['topics_parsed'].apply(extract_topic_scores)
 
-
-# remove articles with more than one entry in OpenAlex
 df = df.groupby('title').first().reset_index()
-
-# Output to csv
 
 df.to_csv(PROCESSED_CSV, index=False)
 print(f"Saved {len(df)} records to {PROCESSED_CSV}")
-
 print(df.columns.tolist())
-
-
 print("Data processing finished.")
