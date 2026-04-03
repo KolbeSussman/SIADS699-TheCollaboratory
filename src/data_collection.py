@@ -10,7 +10,7 @@ from pyalex import Works, config
 
 # Configuration
 #Kolbe API Key
-api_key = 'NGABT8lQbr5z8VxZ9r5AHe'
+api_key = 'insert your api key here'
 config.api_key = api_key
 
 
