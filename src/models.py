@@ -1,68 +1,86 @@
 import pandas as pd
-import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    roc_auc_score,
+    precision_score,
+    recall_score,
+    f1_score
+)
+
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, classification_report
-import os
 
-# Paths
-FEATURES_CSV = "data/processed/features.csv"
-MODEL_OUTPUT = "data/processed/model_results.csv"
-os.makedirs(os.path.dirname(MODEL_OUTPUT), exist_ok=True)
+#Read in data and set feature and y cols
+print("Reading in Data")
+df = pd.read_csv("data/processed/features_temporal.csv")
 
-# Load features
-df = pd.read_csv(FEATURES_CSV)
-feature_cols = ['common_neighbors','jaccard','degree_diff','eigen_diff',
-                'topic_overlap','dept_overlap','paper_diff','citation_diff']
+print("Setting Feature Columns")
+feature_cols = [c for c in df.columns if c not in ['author_1','author_2','label']]
+
 X = df[feature_cols]
 y = df['label']
 
-print(f"Total samples: {len(df)}, Positives: {y.sum()}, Negatives: {len(y)-y.sum()}")
+# Simple split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
 
-# Split by author to avoid leakage
-all_authors = pd.unique(df[['author_1','author_2']].values.ravel())
-train_authors, test_authors = train_test_split(all_authors, test_size=0.2, random_state=42)
-
-def assign_split(row):
-    if row['author_1'] in test_authors or row['author_2'] in test_authors:
-        return 'test'
-    else:
-        return 'train'
-
-df['split'] = df.apply(assign_split, axis=1)
-
-X_train = df[df['split']=='train'][feature_cols]
-y_train = df[df['split']=='train']['label']
-X_test  = df[df['split']=='test'][feature_cols]
-y_test  = df[df['split']=='test']['label']
-
-print(f"Train samples: {len(X_train)}, Test samples: {len(X_test)}")
-
-# Logistic Regression
-print("Training Logistic Regression...")
-lr = LogisticRegression(max_iter=1000, class_weight='balanced')
-lr.fit(X_train, y_train)
-y_pred_lr = lr.predict_proba(X_test)[:,1]
-auc_lr = roc_auc_score(y_test, y_pred_lr)
-print(f"Logistic Regression AUC: {auc_lr:.4f}")
-
-# Random Forest
-print("Training Random Forest...")
-rf = RandomForestClassifier(n_estimators=200, max_depth=15, class_weight='balanced', random_state=42, n_jobs=-1)
+print("Running Random Forest Model")
+#Random Forest Model
+rf = RandomForestClassifier(n_estimators=200, max_depth=15, random_state=42, n_jobs=-1)
 rf.fit(X_train, y_train)
-y_pred_rf = rf.predict_proba(X_test)[:,1]
-auc_rf = roc_auc_score(y_test, y_pred_rf)
-print(f"Random Forest AUC: {auc_rf:.4f}")
 
-# Optional: save predictions
-df_test = df[df['split']=='test'].copy()
-df_test['lr_pred'] = y_pred_lr
-df_test['rf_pred'] = y_pred_rf
-df_test.to_csv(MODEL_OUTPUT, index=False)
-print(f"Saved test predictions to {MODEL_OUTPUT}")
+print("Random Forrest metrics")
+y_pred_prob = rf.predict_proba(X_test)[:,1]
+y_pred = (y_pred_prob >= 0.5).astype(int)
 
-# Detailed classification report
-y_pred_rf_class = (y_pred_rf >= 0.5).astype(int)
-print("Random Forest Classification Report:")
-print(classification_report(y_test, y_pred_rf_class))
+auc = roc_auc_score(y_test, y_pred_prob)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+
+print(f"AUC: {auc:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+print(f"F1 Score: {f1:.4f}")
+
+#Logistic Regression Model
+print("Running Logistic Regression Model")
+model = LogisticRegression(max_iter=1000)
+model.fit(X_train, y_train)
+
+print("Logit metrics")
+y_pred_prob = model.predict_proba(X_test)[:,1]
+y_pred = (y_pred_prob >= 0.5).astype(int)
+
+auc = roc_auc_score(y_test, y_pred_prob)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
+
+print(f"AUC: {auc:.4f}")
+print(f"Precision: {precision:.4f}")
+print(f"Recall: {recall:.4f}")
+print(f"F1 Score: {f1:.4f}")
+
+
+# Save dataset with predictions
+print("Saving dataset with predictions")
+df_out = df.copy()
+
+# Add columns
+df_out['y'] = df['label']
+df_out['pred_y'] = None
+df_out['pred_class'] = None
+df_out['split'] = 'train'   # default everything to train
+
+# Assign test rows
+df_out.loc[X_test.index, 'split'] = 'test'
+df_out.loc[X_test.index, 'pred_y'] = y_pred_prob
+df_out.loc[X_test.index, 'pred_class'] = (y_pred_prob >= 0.5).astype(int)
+
+# Save
+OUTPUT_PRED = "data/processed/model_predictions.csv"
+df_out.to_csv(OUTPUT_PRED, index=False)
+
+print(f"Saved predictions to {OUTPUT_PRED}")
