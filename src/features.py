@@ -1,95 +1,135 @@
 """
-features.py
-Created by: Kolbe Sussman & Qunkun Ma
+features.py (TEMPORAL VERSION)
 
-Generates ML-ready features for link prediction based on precomputed networks:
-- Author co-authorship network
-- Department co-affiliation network
-- Topic co-occurrence network
-
-Features include graph-based, topic, department, paper, and citation metrics.
+Builds features for link prediction using:
+- Past graph (<= cutoff year)
+- Future collaborations as labels (> cutoff year)
 """
 
 import pandas as pd
 import networkx as nx
 from itertools import combinations
 import ast
-import os
-from tqdm import tqdm
 import random
+from tqdm import tqdm
+import os
 
-# Paths
-AUTHOR_METRICS = "data/processed/author_network_metrics.csv"
-AUTHOR_EDGES = "data/processed/author_network_edges.csv"
-AFFILIATION_METRICS = "data/processed/affiliation_network_metrics.csv"
-TOPIC_METRICS = "data/processed/topic_network_metrics.csv"
-WORKS_CSV = "data/processed/umich_works_cleaned.csv"
-OUTPUT_CSV = "data/processed/features_pairs.csv"
+# Config
+CUTOFF_YEAR = 2018
+
+INPUT_CSV = "data/processed/umich_works_cleaned.csv"
+OUTPUT_CSV = "data/processed/features_temporal.csv"
 
 os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
 
-# Load precomputed metrics
-author_metrics = pd.read_csv(AUTHOR_METRICS).set_index('author')
-affil_metrics = pd.read_csv(AFFILIATION_METRICS, engine='python', on_bad_lines='skip').set_index('affiliation')
-topic_metrics = pd.read_csv(TOPIC_METRICS).set_index('topic')
+# Load + parse
+df = pd.read_csv(INPUT_CSV)
 
-# Build author graph from edges
-edges_df = pd.read_csv(AUTHOR_EDGES)
-G_author = nx.from_pandas_edgelist(edges_df, 'author_1', 'author_2', edge_attr='weight')
-
-# Load works for metadata
-df = pd.read_csv(WORKS_CSV)
-
-# Parse list columns
-list_cols = ['author_names', 'raw_affiliations', 'display_names']
-for col in list_cols:
+for col in ['author_names', 'display_names', 'raw_affiliations']:
     df[col] = df[col].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
 
-# Aggregate per-author metadata
-df_exploded = df.explode('author_names')
+# Split data
+train_df = df[df['publication_year'] <= CUTOFF_YEAR]
+test_df  = df[df['publication_year'] > CUTOFF_YEAR]
 
-author_papers = df_exploded.groupby('author_names')['id'].count().to_dict()
-author_citations = df_exploded.groupby('author_names')['cited_by_count'].sum().to_dict()
-author_topics = df_exploded.groupby('author_names')['display_names'].sum().apply(set).to_dict()
-author_depts = df_exploded.groupby('author_names')['raw_affiliations'].sum().apply(set).to_dict()
+print(f"Train papers: {len(train_df)}")
+print(f"Test papers: {len(test_df)}")
 
-# Generate positive and negative pairs
-positive_pairs = list(G_author.edges)
+# Build TRAIN graph
+G = nx.Graph()
+MAX_AUTHORS = 20
 
-all_authors = list(G_author.nodes)
-negative_pairs = set()
-while len(negative_pairs) < len(positive_pairs):
-    a1, a2 = random.sample(all_authors, 2)
-    if not G_author.has_edge(a1, a2):
-        negative_pairs.add((a1, a2))
+for row in train_df.itertuples(index=False):
+    authors = row.author_names
+    if not authors or len(authors) < 2 or len(authors) > MAX_AUTHORS:
+        continue
+    authors = list(set(authors))
+    for a, b in combinations(authors, 2):
+        if G.has_edge(a, b):
+            G[a][b]['weight'] += 1
+        else:
+            G.add_edge(a, b, weight=1)
 
-pairs = [(a1, a2, 1) for a1, a2 in positive_pairs] + [(a1, a2, 0) for a1, a2 in negative_pairs]
+print(f"Train graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
 
-# Helper function
-def jaccard(set1, set2):
-    if not set1 or not set2:
+# Build FUTURE labels
+future_edges = set()
+
+for row in test_df.itertuples(index=False):
+    authors = row.author_names
+    if not authors or len(authors) < 2:
+        continue
+    authors = list(set(authors))
+    for a, b in combinations(authors, 2):
+        future_edges.add(tuple(sorted((a, b))))
+
+print(f"Future edges: {len(future_edges)}")
+
+# Candidate pairs (only authors seen in train)
+authors = list(G.nodes)
+
+# Positives = future collaborations
+positive_pairs = [(a, b) for (a, b) in future_edges if a in G and b in G]
+
+# Hard negative sampling
+negatives = set()
+
+while len(negatives) < len(positive_pairs):
+    a, b = random.sample(authors, 2)
+    pair = tuple(sorted((a, b)))
+
+    if pair in future_edges:
+        continue
+
+    # HARD NEGATIVE: must share something in TRAIN graph
+    neighbors_a = set(G.neighbors(a))
+    neighbors_b = set(G.neighbors(b))
+
+    if len(neighbors_a & neighbors_b) > 0:
+        negatives.add(pair)
+
+negative_pairs = list(negatives)
+
+print(f"Positive: {len(positive_pairs)}, Negative: {len(negative_pairs)}")
+
+# Author metadata (TRAIN ONLY)
+train_exploded = train_df.explode('author_names')
+
+author_papers = train_exploded.groupby('author_names')['id'].count().to_dict()
+author_citations = train_exploded.groupby('author_names')['cited_by_count'].sum().to_dict()
+author_topics = train_exploded.groupby('author_names')['display_names'].sum().apply(set).to_dict()
+author_depts = train_exploded.groupby('author_names')['raw_affiliations'].sum().apply(set).to_dict()
+
+# Feature functions
+def jaccard(s1, s2):
+    if not s1 or not s2:
         return 0
-    return len(set1 & set2) / len(set1 | set2)
+    return len(s1 & s2) / len(s1 | s2)
+
 
 # Compute features
+pairs = [(a,b,1) for a,b in positive_pairs] + [(a,b,0) for a,b in negative_pairs]
+
 features = []
-for a1, a2, label in tqdm(pairs, desc="Computing features"):
-    neighbors1, neighbors2 = set(G_author.neighbors(a1)), set(G_author.neighbors(a2))
+
+for a, b, label in tqdm(pairs, desc="Computing features"):
+    neighbors_a = set(G.neighbors(a))
+    neighbors_b = set(G.neighbors(b))
+
     features.append({
-        'author_1': a1,
-        'author_2': a2,
-        'common_neighbors': len(neighbors1 & neighbors2),
-        'jaccard': jaccard(neighbors1, neighbors2),
-        'degree_diff': abs(author_metrics.loc[a1, 'degree_centrality'] - author_metrics.loc[a2, 'degree_centrality']),
-        'eigen_diff': abs(author_metrics.loc[a1, 'eigenvector_centrality'] - author_metrics.loc[a2, 'eigenvector_centrality']),
-        'topic_overlap': len(author_topics.get(a1,set()) & author_topics.get(a2,set())),
-        'dept_overlap': len(author_depts.get(a1,set()) & author_depts.get(a2,set())),
-        'paper_diff': abs(author_papers.get(a1,0) - author_papers.get(a2,0)),
-        'citation_diff': abs(author_citations.get(a1,0) - author_citations.get(a2,0)),
+        'author_1': a,
+        'author_2': b,
+        'common_neighbors': len(neighbors_a & neighbors_b),
+        'jaccard': jaccard(neighbors_a, neighbors_b),
+        'degree_diff': abs(len(neighbors_a) - len(neighbors_b)),
+        'topic_overlap': len(author_topics.get(a,set()) & author_topics.get(b,set())),
+        'dept_overlap': len(author_depts.get(a,set()) & author_depts.get(b,set())),
+        'paper_diff': abs(author_papers.get(a,0) - author_papers.get(b,0)),
+        'citation_diff': abs(author_citations.get(a,0) - author_citations.get(b,0)),
         'label': label
     })
 
-# Save features
 features_df = pd.DataFrame(features)
 features_df.to_csv(OUTPUT_CSV, index=False)
-print(f"Saved {len(features_df)} feature rows to {OUTPUT_CSV}")
+
+print(f"Saved {len(features_df)} rows to {OUTPUT_CSV}")
