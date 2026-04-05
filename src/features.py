@@ -1,144 +1,95 @@
 """
-Created by: Kolbe Sussman
+features.py
+Created by: Kolbe Sussman & Qunkun Ma
 
-Generates ML-ready link prediction features for University of Michigan collaboration prediction.
-Uses pre-built author, department, and topic networks plus publication metadata.
+Generates ML-ready features for link prediction based on precomputed networks:
+- Author co-authorship network
+- Department co-affiliation network
+- Topic co-occurrence network
+
+Features include graph-based, topic, department, paper, and citation metrics.
 """
 
 import pandas as pd
 import networkx as nx
-from collections import defaultdict
 from itertools import combinations
 import ast
+import os
+from tqdm import tqdm
 import random
 
-# Helper Functions
+# Paths
+AUTHOR_METRICS = "data/processed/author_network_metrics.csv"
+AUTHOR_EDGES = "data/processed/author_network_edges.csv"
+AFFILIATION_METRICS = "data/processed/affiliation_network_metrics.csv"
+TOPIC_METRICS = "data/processed/topic_network_metrics.csv"
+WORKS_CSV = "data/processed/umich_works_cleaned.csv"
+OUTPUT_CSV = "data/processed/features_pairs.csv"
 
-def safe_parse(x):
-    if isinstance(x, list):
-        return x
-    if isinstance(x, str):
-        try:
-            return ast.literal_eval(x)
-        except:
-            return []
-    return []
+os.makedirs(os.path.dirname(OUTPUT_CSV), exist_ok=True)
 
-# Load Data
+# Load precomputed metrics
+author_metrics = pd.read_csv(AUTHOR_METRICS).set_index('author')
+affil_metrics = pd.read_csv(AFFILIATION_METRICS, engine='python', on_bad_lines='skip').set_index('affiliation')
+topic_metrics = pd.read_csv(TOPIC_METRICS).set_index('topic')
 
-df = pd.read_csv("data/processed/umich_works_cleaned.csv")
-df['author_ids'] = df['author_ids'].apply(safe_parse)
-df['display_names'] = df['display_names'].apply(safe_parse)
-df['raw_affiliations'] = df['raw_affiliations'].apply(safe_parse)
+# Build author graph from edges
+edges_df = pd.read_csv(AUTHOR_EDGES)
+G_author = nx.from_pandas_edgelist(edges_df, 'author_1', 'author_2', edge_attr='weight')
 
-author_edges = pd.read_csv("data/processed/author_network_edges.csv")
-author_metrics = pd.read_csv("data/processed/author_network_metrics.csv")
+# Load works for metadata
+df = pd.read_csv(WORKS_CSV)
 
-# Build Author Graph
+# Parse list columns
+list_cols = ['author_names', 'raw_affiliations', 'display_names']
+for col in list_cols:
+    df[col] = df[col].apply(lambda x: ast.literal_eval(x) if isinstance(x, str) else x)
 
-G = nx.Graph()
-for row in author_edges.itertuples(index=False):
-    G.add_edge(row.author_1, row.author_2, weight=row.weight)
+# Aggregate per-author metadata
+df_exploded = df.explode('author_names')
 
-deg_dict = dict(zip(author_metrics['author'], author_metrics['degree_centrality']))
-eig_dict = dict(zip(author_metrics['author'], author_metrics['eigenvector_centrality']))
+author_papers = df_exploded.groupby('author_names')['id'].count().to_dict()
+author_citations = df_exploded.groupby('author_names')['cited_by_count'].sum().to_dict()
+author_topics = df_exploded.groupby('author_names')['display_names'].sum().apply(set).to_dict()
+author_depts = df_exploded.groupby('author_names')['raw_affiliations'].sum().apply(set).to_dict()
 
-# Build Author Metadata
+# Generate positive and negative pairs
+positive_pairs = list(G_author.edges)
 
-author_topics = defaultdict(set)
-author_affils = defaultdict(set)
-author_papers = defaultdict(set)
-author_citations = defaultdict(int)
-
-for row in df.itertuples(index=False):
-    for a in row.author_ids:
-        if a:
-            author_topics[a].update(row.display_names)
-            author_affils[a].update(row.raw_affiliations)
-            author_papers[a].add(row.id)
-            author_citations[a] += row.cited_by_count
-
-# Generate Candidate Pairs
-
-# Positive examples: observed coauthor edges
-positive_pairs = set(zip(author_edges['author_1'], author_edges['author_2']))
-
-# Negative examples: random pairs without collaboration
-all_authors = list(G.nodes)
+all_authors = list(G_author.nodes)
 negative_pairs = set()
 while len(negative_pairs) < len(positive_pairs):
-    a, b = random.sample(all_authors, 2)
-    if (a, b) not in positive_pairs and (b, a) not in positive_pairs:
-        negative_pairs.add((a, b))
+    a1, a2 = random.sample(all_authors, 2)
+    if not G_author.has_edge(a1, a2):
+        negative_pairs.add((a1, a2))
 
-# Feature Functions
+pairs = [(a1, a2, 1) for a1, a2 in positive_pairs] + [(a1, a2, 0) for a1, a2 in negative_pairs]
 
-def common_neighbors(a, b):
-    try:
-        return len(list(nx.common_neighbors(G, a, b)))
-    except:
+# Helper function
+def jaccard(set1, set2):
+    if not set1 or not set2:
         return 0
+    return len(set1 & set2) / len(set1 | set2)
 
-def jaccard(a, b):
-    try:
-        return next(nx.jaccard_coefficient(G, [(a, b)]))[2]
-    except:
-        return 0
+# Compute features
+features = []
+for a1, a2, label in tqdm(pairs, desc="Computing features"):
+    neighbors1, neighbors2 = set(G_author.neighbors(a1)), set(G_author.neighbors(a2))
+    features.append({
+        'author_1': a1,
+        'author_2': a2,
+        'common_neighbors': len(neighbors1 & neighbors2),
+        'jaccard': jaccard(neighbors1, neighbors2),
+        'degree_diff': abs(author_metrics.loc[a1, 'degree_centrality'] - author_metrics.loc[a2, 'degree_centrality']),
+        'eigen_diff': abs(author_metrics.loc[a1, 'eigenvector_centrality'] - author_metrics.loc[a2, 'eigenvector_centrality']),
+        'topic_overlap': len(author_topics.get(a1,set()) & author_topics.get(a2,set())),
+        'dept_overlap': len(author_depts.get(a1,set()) & author_depts.get(a2,set())),
+        'paper_diff': abs(author_papers.get(a1,0) - author_papers.get(a2,0)),
+        'citation_diff': abs(author_citations.get(a1,0) - author_citations.get(a2,0)),
+        'label': label
+    })
 
-def degree_diff(a, b):
-    return abs(deg_dict.get(a, 0) - deg_dict.get(b, 0))
-
-def eigen_diff(a, b):
-    return abs(eig_dict.get(a, 0) - eig_dict.get(b, 0))
-
-def topic_overlap(a, b):
-    t1 = author_topics[a]
-    t2 = author_topics[b]
-    if not t1 or not t2:
-        return 0
-    return len(t1 & t2) / len(t1 | t2)
-
-def dept_overlap(a, b):
-    d1 = author_affils[a]
-    d2 = author_affils[b]
-    if not d1 or not d2:
-        return 0
-    return len(d1 & d2) / len(d1 | d2)
-
-def paper_diff(a, b):
-    return abs(len(author_papers[a]) - len(author_papers[b]))
-
-def citation_diff(a, b):
-    return abs(author_citations[a] - author_citations[b])
-
-# Build Feature Dataset
-
-def build_row(a, b, label):
-    return {
-        "author_1": a,
-        "author_2": b,
-        "common_neighbors": common_neighbors(a, b),
-        "jaccard": jaccard(a, b),
-        "degree_diff": degree_diff(a, b),
-        "eigen_diff": eigen_diff(a, b),
-        "topic_overlap": topic_overlap(a, b),
-        "dept_overlap": dept_overlap(a, b),
-        "paper_diff": paper_diff(a, b),
-        "citation_diff": citation_diff(a, b),
-        "label": label
-    }
-
-rows = []
-
-for a, b in positive_pairs:
-    rows.append(build_row(a, b, 1))
-
-for a, b in negative_pairs:
-    rows.append(build_row(a, b, 0))
-
-features_df = pd.DataFrame(rows)
-
-# Save Features
-
-features_df.to_csv("data/processed/link_prediction_features.csv", index=False)
-print("Feature dataset created and saved! Rows:", len(features_df))
+# Save features
+features_df = pd.DataFrame(features)
+features_df.to_csv(OUTPUT_CSV, index=False)
+print(f"Saved {len(features_df)} feature rows to {OUTPUT_CSV}")
